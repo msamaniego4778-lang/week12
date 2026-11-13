@@ -1,4 +1,3 @@
-const STORAGE_KEY = 'daylight-organizer-tasks-v1';
 const THEME_KEY = 'daylight-organizer-theme-v1';
 const priorityOrder = { high: 0, medium: 1, low: 2 };
 
@@ -7,32 +6,53 @@ const taskDialog = document.querySelector('#task-dialog');
 const taskForm = document.querySelector('#task-form');
 const assistantForm = document.querySelector('#assistant-form');
 const assistantResult = document.querySelector('#assistant-result');
-let tasks = loadTasks();
+const appStatus = document.querySelector('#app-status');
+let tasks = [];
 let activeFilter = 'all';
+let loadState = 'loading';
 
-function loadTasks() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-    return Array.isArray(stored) ? stored.filter(isValidTask) : [];
-  } catch (error) {
-    console.error('Could not load saved tasks:', error);
-    return [];
+async function apiRequest(path, options) {
+  const requestOptions = { ...options };
+  requestOptions.headers = { ...(requestOptions.headers || {}) };
+  if (requestOptions.body) requestOptions.headers['Content-Type'] = 'application/json';
+  const response = await fetch(path, requestOptions);
+  const responseText = await response.text();
+  let result = null;
+  if (responseText) {
+    try {
+      result = JSON.parse(responseText);
+    } catch {
+      throw new Error('The server returned an invalid response.');
+    }
   }
+  if (!response.ok) {
+    throw new Error(result && result.error ? result.error : `Request failed (${response.status}).`);
+  }
+  return result;
 }
 
-function isValidTask(task) {
-  return task && typeof task.id === 'string' && typeof task.title === 'string'
-    && typeof task.completed === 'boolean'
-    && ['low', 'medium', 'high'].includes(task.priority);
+function showStatus(message, isError) {
+  appStatus.textContent = message;
+  appStatus.hidden = !message;
+  appStatus.setAttribute('role', isError ? 'alert' : 'status');
 }
 
-function saveTasks() {
+function clearStatus() {
+  showStatus('', false);
+}
+
+async function loadTasks() {
+  loadState = 'loading';
+  renderTasks();
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+    tasks = await apiRequest('/api/tasks');
+    loadState = 'ready';
+    clearStatus();
   } catch (error) {
-    console.error('Could not save tasks:', error);
-    window.alert('Your changes could not be saved in this browser.');
+    loadState = 'error';
+    showStatus(`Could not load tasks: ${error.message}`, true);
   }
+  renderTasks();
 }
 
 function localDateString(date) {
@@ -88,9 +108,18 @@ function renderTasks() {
   document.querySelector('#today-count').textContent = tasks.filter((task) => task.date === today && !task.completed).length;
   taskList.innerHTML = '';
 
+  if (loadState === 'loading') {
+    taskList.innerHTML = '<div class="empty-state"><p>Loading your tasks…</p></div>';
+    return;
+  }
+  if (loadState === 'error') {
+    taskList.innerHTML = '<div class="empty-state"><div class="empty-icon" aria-hidden="true">!</div><h3>Your tasks are unavailable</h3><p>Check that the server is running, then try again.</p><button class="retry-load" type="button">Retry</button></div>';
+    return;
+  }
   if (visibleTasks.length === 0) {
-    const emptyTitle = query || priority !== 'all' ? 'No matching tasks' : emptyStateTitle();
-    const emptyCopy = query || priority !== 'all'
+    const hasFilters = query || priority !== 'all';
+    const emptyTitle = hasFilters ? 'No matching tasks' : emptyStateTitle();
+    const emptyCopy = hasFilters
       ? 'Try another search or filter.'
       : 'Add a task or ask your planner to help you get started.';
     taskList.innerHTML = `<div class="empty-state"><div class="empty-icon" aria-hidden="true">✳</div><h3>${emptyTitle}</h3><p>${emptyCopy}</p></div>`;
@@ -128,6 +157,9 @@ function emptyStateTitle() {
 
 function openTaskDialog(task) {
   taskForm.reset();
+  const dialogStatus = document.querySelector('#dialog-status');
+  dialogStatus.textContent = '';
+  dialogStatus.hidden = true;
   document.querySelector('#task-id').value = task ? task.id : '';
   document.querySelector('#task-title').value = task ? task.title : '';
   document.querySelector('#task-description').value = task ? task.description || '' : '';
@@ -139,18 +171,20 @@ function openTaskDialog(task) {
   document.querySelector('#task-title').focus();
 }
 
-function createTask(title, options) {
-  tasks.unshift({
-    id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    title,
-    description: options.description || '',
-    date: options.date || '',
-    priority: options.priority || 'medium',
-    completed: false,
-    createdAt: Date.now()
+async function createTask(title, options) {
+  const task = await apiRequest('/api/tasks', {
+    method: 'POST',
+    body: JSON.stringify({
+      title,
+      description: options.description || '',
+      date: options.date || '',
+      priority: options.priority || 'medium'
+    })
   });
-  saveTasks();
+  tasks.unshift(task);
+  clearStatus();
   renderTasks();
+  return task;
 }
 
 document.querySelector('#add-task-button').addEventListener('click', () => openTaskDialog());
@@ -158,8 +192,9 @@ document.querySelectorAll('.close-dialog').forEach((button) => {
   button.addEventListener('click', () => taskDialog.close());
 });
 
-taskForm.addEventListener('submit', (event) => {
+taskForm.addEventListener('submit', async (event) => {
   event.preventDefault();
+  const saveButton = document.querySelector('#save-task-button');
   const id = document.querySelector('#task-id').value;
   const title = document.querySelector('#task-title').value.trim();
   if (!title) return;
@@ -169,32 +204,61 @@ taskForm.addEventListener('submit', (event) => {
     date: document.querySelector('#task-date').value,
     priority: document.querySelector('#task-priority').value
   };
-  if (id) {
-    tasks = tasks.map((task) => task.id === id ? { ...task, ...changes } : task);
-  } else {
-    createTask(title, changes);
+  saveButton.disabled = true;
+  try {
+    if (id) {
+      const updatedTask = await apiRequest(`/api/tasks/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(changes)
+      });
+      tasks = tasks.map((task) => task.id === id ? updatedTask : task);
+    } else {
+      await createTask(title, changes);
+    }
+    clearStatus();
+    renderTasks();
+    taskDialog.close();
+  } catch (error) {
+    const dialogStatus = document.querySelector('#dialog-status');
+    dialogStatus.textContent = `Could not save task: ${error.message}`;
+    dialogStatus.hidden = false;
+  } finally {
+    saveButton.disabled = false;
   }
-  saveTasks();
-  renderTasks();
-  taskDialog.close();
 });
 
-taskList.addEventListener('click', (event) => {
+taskList.addEventListener('click', async (event) => {
+  if (event.target.closest('.retry-load')) {
+    loadTasks();
+    return;
+  }
   const button = event.target.closest('[data-action]');
   if (!button) return;
   const card = button.closest('[data-id]');
   const task = tasks.find((item) => item.id === card.dataset.id);
   if (!task) return;
-  if (button.dataset.action === 'toggle') {
-    task.completed = !task.completed;
-    saveTasks();
-    renderTasks();
-  } else if (button.dataset.action === 'edit') {
+  if (button.dataset.action === 'edit') {
     openTaskDialog(task);
-  } else if (button.dataset.action === 'delete') {
-    tasks = tasks.filter((item) => item.id !== task.id);
-    saveTasks();
+    return;
+  }
+
+  button.disabled = true;
+  try {
+    if (button.dataset.action === 'toggle') {
+      const updatedTask = await apiRequest(`/api/tasks/${encodeURIComponent(task.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ completed: !task.completed })
+      });
+      tasks = tasks.map((item) => item.id === task.id ? updatedTask : item);
+    } else if (button.dataset.action === 'delete') {
+      await apiRequest(`/api/tasks/${encodeURIComponent(task.id)}`, { method: 'DELETE' });
+      tasks = tasks.filter((item) => item.id !== task.id);
+    }
+    clearStatus();
     renderTasks();
+  } catch (error) {
+    showStatus(`Could not update task: ${error.message}`, true);
+    button.disabled = false;
   }
 });
 
@@ -214,45 +278,45 @@ document.querySelector('#search-input').addEventListener('input', renderTasks);
 document.querySelector('#priority-filter').addEventListener('change', renderTasks);
 document.querySelector('#sort-select').addEventListener('change', renderTasks);
 
-function makeSuggestions(goal) {
-  const normalized = goal.toLowerCase();
-  if (/launch|project|product|website|app/.test(normalized)) {
-    return ['Define the goal and success criteria', 'Break the work into milestones', 'Gather the tools and resources you need', 'Review progress and decide the next step'];
-  }
-  if (/study|exam|learn|course|class/.test(normalized)) {
-    return ['Gather your study materials', 'Break the topic into focused sections', 'Schedule a short study session', 'Review what you learned'];
-  }
-  if (/trip|travel|vacation|holiday/.test(normalized)) {
-    return ['Choose dates and set a budget', 'Research and book transportation', 'Plan where you will stay', 'Make a packing checklist'];
-  }
-  if (/clean|organ|tidy|declutter/.test(normalized)) {
-    return ['Pick one area to start with', 'Gather supplies and sort what you have', 'Clean or organize the first area', 'Set aside items to donate or put away'];
-  }
-  if (/write|essay|report|blog|article/.test(normalized)) {
-    return ['Choose the main point and audience', 'Outline the key sections', 'Write a first draft', 'Review and polish the draft'];
-  }
-  return ['Clarify what success looks like', 'List the first few steps', 'Set aside time for the first step', 'Check your progress and adjust the plan'];
-}
-
-assistantForm.addEventListener('submit', (event) => {
+assistantForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const goal = document.querySelector('#goal-input').value.trim();
+  const goalInput = document.querySelector('#goal-input');
+  const submitButton = assistantForm.querySelector('button[type="submit"]');
+  const goal = goalInput.value.trim();
   if (!goal) return;
-  const suggestions = makeSuggestions(goal);
-  assistantResult.innerHTML = `
-    <p class="assistant-result-heading">A starting plan for “${escapeHTML(goal)}”</p>
-    <ul class="suggestion-list">${suggestions.map((suggestion, index) => `
-      <li><span>${index + 1}. ${escapeHTML(suggestion)}</span><button type="button" data-suggestion="${escapeHTML(suggestion)}">+ Add task</button></li>
-    `).join('')}</ul>`;
-  assistantResult.classList.add('visible');
+  submitButton.disabled = true;
+  submitButton.textContent = 'Making a plan…';
+  try {
+    const result = await apiRequest('/api/plan', {
+      method: 'POST',
+      body: JSON.stringify({ goal })
+    });
+    assistantResult.innerHTML = `
+      <p class="assistant-result-heading">A starting plan for “${escapeHTML(goal)}”</p>
+      <ul class="suggestion-list">${result.suggestions.map((suggestion, index) => `
+        <li><span>${index + 1}. ${escapeHTML(suggestion)}</span><button type="button" data-suggestion="${escapeHTML(suggestion)}">+ Add task</button></li>
+      `).join('')}</ul>`;
+    assistantResult.classList.add('visible');
+    clearStatus();
+  } catch (error) {
+    showStatus(`Could not make a plan: ${error.message}`, true);
+  } finally {
+    submitButton.disabled = false;
+    submitButton.innerHTML = 'Make a plan <span aria-hidden="true">→</span>';
+  }
 });
 
-assistantResult.addEventListener('click', (event) => {
+assistantResult.addEventListener('click', async (event) => {
   const button = event.target.closest('[data-suggestion]');
   if (!button) return;
-  createTask(button.dataset.suggestion, { priority: 'medium' });
-  button.textContent = 'Added';
   button.disabled = true;
+  try {
+    await createTask(button.dataset.suggestion, { priority: 'medium' });
+    button.textContent = 'Added';
+  } catch (error) {
+    button.disabled = false;
+    showStatus(`Could not add suggested task: ${error.message}`, true);
+  }
 });
 
 document.querySelector('#theme-button').addEventListener('click', () => {
@@ -280,4 +344,4 @@ document.addEventListener('keydown', (event) => {
   }
 });
 
-renderTasks();
+loadTasks();
