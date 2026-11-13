@@ -1,4 +1,5 @@
 const THEME_KEY = 'daylight-organizer-theme-v1';
+const TASKS_KEY = 'daylight-organizer-tasks-v1';
 const priorityOrder = { high: 0, medium: 1, low: 2 };
 
 const taskList = document.querySelector('#task-list');
@@ -10,13 +11,86 @@ const appStatus = document.querySelector('#app-status');
 let tasks = [];
 let activeFilter = 'all';
 let loadState = 'loading';
+let useBrowserStorage = false;
 
-async function apiRequest(path, options) {
+function loadBrowserTasks() {
+  const saved = JSON.parse(localStorage.getItem(TASKS_KEY) || '[]');
+  if (!Array.isArray(saved)) throw new Error('Saved browser tasks are not in the expected format.');
+  return saved.filter((task) => task && typeof task.id === 'string'
+    && typeof task.title === 'string' && typeof task.completed === 'boolean'
+    && ['low', 'medium', 'high'].includes(task.priority));
+}
+
+function saveBrowserTasks(nextTasks) {
+  localStorage.setItem(TASKS_KEY, JSON.stringify(nextTasks));
+}
+
+function createBrowserTask(values) {
+  return {
+    id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    title: values.title,
+    description: values.description || '',
+    date: values.date || '',
+    priority: values.priority || 'medium',
+    completed: false,
+    createdAt: Date.now()
+  };
+}
+
+async function browserStorageRequest(path, options) {
+  const method = options.method || 'GET';
+  const taskPath = path.match(/^\/api\/tasks\/([^/]+)$/);
+  if (path === '/api/tasks' && method === 'GET') return loadBrowserTasks();
+  if (path === '/api/tasks' && method === 'POST') {
+    const task = createBrowserTask(JSON.parse(options.body));
+    const nextTasks = [task, ...loadBrowserTasks()];
+    saveBrowserTasks(nextTasks);
+    return task;
+  }
+  if (taskPath && method === 'PATCH') {
+    const id = decodeURIComponent(taskPath[1]);
+    const changes = JSON.parse(options.body);
+    const currentTasks = loadBrowserTasks();
+    const index = currentTasks.findIndex((task) => task.id === id);
+    if (index === -1) throw new Error('Task not found.');
+    currentTasks[index] = { ...currentTasks[index], ...changes };
+    saveBrowserTasks(currentTasks);
+    return currentTasks[index];
+  }
+  if (taskPath && method === 'DELETE') {
+    const id = decodeURIComponent(taskPath[1]);
+    const currentTasks = loadBrowserTasks();
+    const nextTasks = currentTasks.filter((task) => task.id !== id);
+    if (nextTasks.length === currentTasks.length) throw new Error('Task not found.');
+    saveBrowserTasks(nextTasks);
+    return null;
+  }
+  if (path === '/api/plan' && method === 'POST') {
+    const input = JSON.parse(options.body);
+    return { suggestions: makeSuggestions(input.goal) };
+  }
+  throw new Error('This action is not available in browser storage mode.');
+}
+
+async function apiRequest(path, options = {}) {
+  if (useBrowserStorage) return browserStorageRequest(path, options);
   const requestOptions = { ...options };
   requestOptions.headers = { ...(requestOptions.headers || {}) };
   if (requestOptions.body) requestOptions.headers['Content-Type'] = 'application/json';
   const response = await fetch(path, requestOptions);
   const responseText = await response.text();
+  if (!response.ok) {
+    let message = `Request failed (${response.status}).`;
+    try {
+      const errorResult = JSON.parse(responseText);
+      if (errorResult.error) message = errorResult.error;
+    } catch {
+      // Non-JSON error pages are expected on static hosts without an API.
+    }
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
+  }
   let result = null;
   if (responseText) {
     try {
@@ -25,9 +99,6 @@ async function apiRequest(path, options) {
       throw new Error('The server returned an invalid response.');
     }
   }
-  if (!response.ok) {
-    throw new Error(result && result.error ? result.error : `Request failed (${response.status}).`);
-  }
   return result;
 }
 
@@ -35,10 +106,15 @@ function showStatus(message, isError) {
   appStatus.textContent = message;
   appStatus.hidden = !message;
   appStatus.setAttribute('role', isError ? 'alert' : 'status');
+  appStatus.classList.toggle('info', Boolean(message) && !isError);
 }
 
 function clearStatus() {
-  showStatus('', false);
+  if (useBrowserStorage) {
+    showStatus('This site has no task server. Tasks are saved only in this browser.', false);
+  } else {
+    showStatus('', false);
+  }
 }
 
 async function loadTasks() {
@@ -49,8 +125,20 @@ async function loadTasks() {
     loadState = 'ready';
     clearStatus();
   } catch (error) {
-    loadState = 'error';
-    showStatus(`Could not load tasks: ${error.message}`, true);
+    if (error.status === 404) {
+      useBrowserStorage = true;
+      try {
+        tasks = await apiRequest('/api/tasks');
+        loadState = 'ready';
+        clearStatus();
+      } catch (storageError) {
+        loadState = 'error';
+        showStatus(`Could not load browser tasks: ${storageError.message}`, true);
+      }
+    } else {
+      loadState = 'error';
+      showStatus(`Could not load tasks: ${error.message}`, true);
+    }
   }
   renderTasks();
 }
@@ -153,6 +241,26 @@ function emptyStateTitle() {
   if (activeFilter === 'upcoming') return 'No upcoming tasks';
   if (activeFilter === 'completed') return 'No completed tasks yet';
   return 'Your day, at a glance';
+}
+
+function makeSuggestions(goal) {
+  const normalized = goal.toLowerCase();
+  if (/launch|project|product|website|app/.test(normalized)) {
+    return ['Define the goal and success criteria', 'Break the work into milestones', 'Gather the tools and resources you need', 'Review progress and decide the next step'];
+  }
+  if (/study|exam|learn|course|class/.test(normalized)) {
+    return ['Gather your study materials', 'Break the topic into focused sections', 'Schedule a short study session', 'Review what you learned'];
+  }
+  if (/trip|travel|vacation|holiday/.test(normalized)) {
+    return ['Choose dates and set a budget', 'Research and book transportation', 'Plan where you will stay', 'Make a packing checklist'];
+  }
+  if (/clean|organ|tidy|declutter/.test(normalized)) {
+    return ['Pick one area to start with', 'Gather supplies and sort what you have', 'Clean or organize the first area', 'Set aside items to donate or put away'];
+  }
+  if (/write|essay|report|blog|article/.test(normalized)) {
+    return ['Choose the main point and audience', 'Outline the key sections', 'Write a first draft', 'Review and polish the draft'];
+  }
+  return ['Clarify what success looks like', 'List the first few steps', 'Set aside time for the first step', 'Check your progress and adjust the plan'];
 }
 
 function openTaskDialog(task) {
