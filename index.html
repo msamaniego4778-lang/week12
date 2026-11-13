@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f6f7fb">
+  <title>Daylight — AI To-do Organizer</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#" aria-label="Daylight home">
+        <span class="brand-mark" aria-hidden="true">d</span>
+        <span>daylight</span>
+      </a>
+
+      <div class="workspace-label">WORKSPACE</div>
+      <nav class="navigation" aria-label="Task views">
+        <button class="nav-link active" data-filter="all">
+          <span class="nav-icon" aria-hidden="true">▦</span> All tasks
+          <span class="nav-count" id="all-count">0</span>
+        </button>
+        <button class="nav-link" data-filter="today">
+          <span class="nav-icon" aria-hidden="true">◷</span> Today
+          <span class="nav-count" id="today-count">0</span>
+        </button>
+        <button class="nav-link" data-filter="upcoming">
+          <span class="nav-icon" aria-hidden="true">▤</span> Upcoming
+        </button>
+        <button class="nav-link" data-filter="completed">
+          <span class="nav-icon" aria-hidden="true">✓</span> Completed
+        </button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="focus-card">
+          <span class="focus-sparkle" aria-hidden="true">✦</span>
+          <p class="focus-title">A little progress adds up.</p>
+          <p class="focus-copy">Keep your day moving, one task at a time.</p>
+        </div>
+        <div class="profile">
+          <div class="avatar" aria-hidden="true">Y</div>
+          <div><strong>Your workspace</strong><span>Personal plan</span></div>
+          <span class="profile-menu" aria-hidden="true">···</span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div class="breadcrumb">Workspace <span>/</span> <strong id="breadcrumb-view">All tasks</strong></div>
+        <div class="topbar-actions">
+          <label class="search-box">
+            <span aria-hidden="true">⌕</span>
+            <input id="search-input" type="search" placeholder="Search tasks..." aria-label="Search tasks">
+            <kbd>⌘ K</kbd>
+          </label>
+          <button class="icon-button" id="theme-button" aria-label="Toggle color theme" title="Toggle color theme">◐</button>
+        </div>
+      </header>
+
+      <section class="content">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow" id="today-label"></p>
+            <h1 id="page-title">All tasks <span class="heading-sparkle" aria-hidden="true">✳</span></h1>
+            <p class="page-subtitle">A clear mind starts with a clear plan.</p>
+          </div>
+          <button class="primary-button" id="add-task-button"><span aria-hidden="true">＋</span> Add task</button>
+        </div>
+
+        <section class="assistant-card" aria-labelledby="assistant-title">
+          <div class="assistant-icon" aria-hidden="true">✦</div>
+          <div class="assistant-content">
+            <div class="assistant-heading">
+              <div>
+                <span class="assistant-kicker">YOUR AI PLANNER</span>
+                <h2 id="assistant-title">What would you like to get done?</h2>
+              </div>
+              <span class="local-badge"><span></span> Ready to help</span>
+            </div>
+            <form id="assistant-form" class="assistant-form">
+              <label class="visually-hidden" for="goal-input">Describe a goal for the AI planner</label>
+              <input id="goal-input" type="text" placeholder="e.g. Plan a launch for my new project..." maxlength="160" required>
+              <button type="submit">Make a plan <span aria-hidden="true">→</span></button>
+            </form>
+            <p class="assistant-note">Turn a goal into a few manageable tasks. Your plans stay on this device.</p>
+            <div id="assistant-result" class="assistant-result" aria-live="polite"></div>
+          </div>
+        </section>
+
+        <div class="task-toolbar">
+          <div class="task-heading">
+            <h2 id="list-heading">Your tasks</h2>
+            <span class="task-total" id="visible-count">0</span>
+          </div>
+          <div class="toolbar-controls">
+            <label class="select-wrap">
+              <span class="visually-hidden">Filter by priority</span>
+              <select id="priority-filter">
+                <option value="all">All priorities</option>
+                <option value="high">High priority</option>
+                <option value="medium">Medium priority</option>
+                <option value="low">Low priority</option>
+              </select>
+            </label>
+            <label class="select-wrap">
+              <span class="visually-hidden">Sort tasks</span>
+              <select id="sort-select">
+                <option value="date">Due date</option>
+                <option value="priority">Priority</option>
+                <option value="created">Recently added</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div id="task-list" class="task-list" aria-live="polite"></div>
+      </section>
+      <footer class="footer-note">Make space for what matters <span aria-hidden="true">✦</span></footer>
+    </main>
+  </div>
+
+  <dialog id="task-dialog" class="task-dialog">
+    <form id="task-form" method="dialog">
+      <div class="dialog-heading">
+        <div>
+          <span class="assistant-kicker">TASK DETAILS</span>
+          <h2 id="dialog-title">Create a task</h2>
+        </div>
+        <button type="button" class="icon-button close-dialog" aria-label="Close dialog">×</button>
+      </div>
+      <input type="hidden" id="task-id">
+      <label class="field-label" for="task-title">Task name</label>
+      <input class="form-control" id="task-title" type="text" placeholder="What needs to be done?" maxlength="100" required>
+      <label class="field-label" for="task-description">Notes <span>(optional)</span></label>
+      <textarea class="form-control" id="task-description" rows="3" placeholder="Add a little more detail..." maxlength="400"></textarea>
+      <div class="form-row">
+        <div>
+          <label class="field-label" for="task-date">Due date</label>
+          <input class="form-control" id="task-date" type="date">
+        </div>
+        <div>
+          <label class="field-label" for="task-priority">Priority</label>
+          <select class="form-control" id="task-priority">
+            <option value="low">Low</option>
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+          </select>
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="secondary-button close-dialog">Cancel</button>
+        <button type="submit" class="primary-button" id="save-task-button">Save task</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>
